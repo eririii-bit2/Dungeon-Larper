@@ -1,34 +1,57 @@
 import pygame
-
+import math
 pygame.init()
 
-# Screen Dimensions
 WIDTH = 800
 HEIGHT = 600
 
-
-# Colors
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-RED = (255, 0, 0)
+# Color
 GREEN = (0, 255, 0)
-BLUE = (0, 0, 255)
 YELLOW = (255, 255, 0)
 BG = (42, 42, 42)
+WALL = (80, 80, 80)
 
-# Set Screen
+# Player Color
+P_COLOR_STOP = (0, 191, 0)
+P_COLOR_MOVING = (100, 200, 100)
+
+WALL_H = 150  # border thickness
+
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
-
-# Caption
 pygame.display.set_caption("Dungeon Larper")
 
-player_x = 0
+top_wall = pygame.Rect(0, 0, WIDTH, WALL_H)
+bottom_wall = pygame.Rect(0, HEIGHT - WALL_H, WIDTH, WALL_H)
+
+def draw_slime(surface, P_color, x, y, radius, dx, dy):
+    pygame.draw.circle(surface, P_color, (x, y), radius)
+    pygame.draw.circle(surface, (134, 218, 134), (x, y), radius, 2)
+
+    length = math.hypot(dx, dy)
+    if length != 0:
+        nx, ny = dx / length, dy / length
+    else:
+        nx, ny = 1, 0
+
+    # Eye
+    eye_x = int(x + nx * (radius // 3))
+    eye_y = int(y + ny * (radius // 3))
+    pygame.draw.circle(surface, (25, 25, 25), (eye_x, eye_y), radius // 4)
+
+    # Pupil
+    pupil_x = int(eye_x + nx * (radius // 8))
+    pupil_y = int(eye_y + ny * (radius // 8))
+    pygame.draw.circle(surface, (217, 217, 217), (pupil_x, pupil_y), radius // 12)
+
+RADIUS = 20
+player_x = 60
 player_y = 300
 speed = 3
+room = 1
+dx, dy = 1, 0
 
 running = True
-
 while running:
 
     for event in pygame.event.get():
@@ -36,39 +59,64 @@ while running:
             running = False
 
     keys = pygame.key.get_pressed()
+    new_dx, new_dy = 0, 0
     moving = False
 
-    if keys[pygame.K_a]: 
+    if keys[pygame.K_a]:
         player_x -= speed
+        new_dx -= 1
         moving = True
-
     if keys[pygame.K_d]:
         player_x += speed
+        new_dx += 1
         moving = True
-
     if keys[pygame.K_w]:
         player_y -= speed
+        new_dy -= 1
         moving = True
-
     if keys[pygame.K_s]:
         player_y += speed
+        new_dy += 1
         moving = True
-    #if keys[pygame.K_q]:
 
-    # Change Color
-    P_color = RED if moving else BLUE
-    
-    screen.fill(BG)
+    if new_dx != 0 or new_dy != 0:
+        dx, dy = new_dx, new_dy
 
-    # Player
-    player_rect = pygame.draw.rect(screen, P_color, (player_x, player_y, 50, 50))
-    
-    # Goal
-    goal_rect =pygame.draw.rect(screen, GREEN, (750, 300, 30, 75))
+    P_color = P_COLOR_MOVING if moving else P_COLOR_STOP
 
-    # Update
+    # Clamp within walls
+    player_x = max(RADIUS, min(WIDTH - RADIUS, player_x))
+    player_y = max(WALL_H + RADIUS, min(HEIGHT - WALL_H - RADIUS, player_y))
+
+    player_circle = pygame.Rect(player_x - RADIUS, player_y - RADIUS, RADIUS * 2, RADIUS * 2)
+
+    if room == 1:
+        screen.fill(BG)
+        pygame.draw.rect(screen, WALL, top_wall)
+        pygame.draw.rect(screen, WALL, bottom_wall)
+
+        goal_rect = pygame.Rect(750, 262, 30, 75)
+        pygame.draw.rect(screen, GREEN, goal_rect)
+        draw_slime(screen, P_color, player_x, player_y, RADIUS, dx, dy)
+
+        if player_circle.colliderect(goal_rect):
+            room = 2
+            player_x, player_y = 60, 300
+
+    elif room == 2:
+        screen.fill((20, 20, 60))
+        pygame.draw.rect(screen, WALL, top_wall)
+        pygame.draw.rect(screen, WALL, bottom_wall)
+
+        goal_rect2 = pygame.Rect(750, 262, 30, 75)
+        pygame.draw.rect(screen, YELLOW, goal_rect2)
+        draw_slime(screen, P_color, player_x, player_y, RADIUS, dx, dy)
+
+        if player_circle.colliderect(goal_rect2):
+            room = 1
+            player_x, player_y = 60, 300
+
     pygame.display.update()
-
     clock.tick(60)
 
 pygame.quit()
