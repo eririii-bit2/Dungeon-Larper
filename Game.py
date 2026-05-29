@@ -1,5 +1,6 @@
 import pygame, math, time
 pygame.init()
+pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
 
 WIDTH, HEIGHT = 800, 600
 WALL_H = 150
@@ -42,11 +43,41 @@ ENEMY_KINDS = {
     "drop":{"body":(100,180,255),"out":(60,120,200),"eye":(20,20,80),"kills":3},
 }
 
-# ── Audio stubs ───────────────────────────────────────────────────────────────
-pygame.mixer.music.load("bg_music.mp3"); pygame.mixer.music.play(-1)
-sfx_slash = pygame.mixer.Sound("slash.mp3")
-sfx_hit   = pygame.mixer.Sound("hit.mp3")
-audio_volume = 3
+# ── Audio ─────────────────────────────────────────────────────────────────────
+# Safe loader — returns None instead of crashing if the file is missing.
+def _load_music(path):
+    try:
+        pygame.mixer.music.load(path)
+        pygame.mixer.music.play(-1)
+    except Exception:
+        pass  # no music file — silently skip
+
+def _load_sfx(path):
+    try:
+        return pygame.mixer.Sound(path)
+    except Exception:
+        return None  # no sfx file — return sentinel
+
+_load_music("bg_music.mp3")
+sfx_slash = _load_sfx("slash.mp3")
+sfx_hit   = _load_sfx("hit.mp3")
+
+audio_volume = 3  # 1-5, user-facing scale
+
+def _apply_volume(vol_1_to_5):
+    """Map the 1-5 UI scale to pygame's 0.0-1.0 and apply to music + all sfx."""
+    v = (vol_1_to_5 - 1) / 4.0          # 1→0.0, 3→0.5, 5→1.0
+    pygame.mixer.music.set_volume(v)
+    for snd in (sfx_slash, sfx_hit):
+        if snd is not None:
+            snd.set_volume(v)
+
+_apply_volume(audio_volume)             # apply default on startup
+
+def play_sfx(snd):
+    """Play a Sound object if it loaded successfully."""
+    if snd is not None:
+        snd.play()
 
 # ── Globals ───────────────────────────────────────────────────────────────────
 hint_visible = True
@@ -549,7 +580,9 @@ def run_menu(surf,t,mx,my,clicked):
             bc=(100,74,38) if i==audio_volume else (52,38,22)
             pygame.draw.rect(surf,bc,br,border_radius=4); pygame.draw.rect(surf,(158,128,78),br,1,border_radius=4)
             bl=font_med.render(str(i),True,(218,192,148)); surf.blit(bl,(br.centerx-bl.get_width()//2,br.centery-bl.get_height()//2))
-            if clicked and br.collidepoint(mx,my): audio_volume=i
+            if clicked and br.collidepoint(mx,my):
+                audio_volume=i
+                _apply_volume(audio_volume)   # ← actually wire up the volume change
         back=pygame.Rect(18,558,102,32); menu_button(surf,"Back",back,back.collidepoint(mx,my))
         if clicked and back.collidepoint(mx,my): menu_screen="main"
 
@@ -575,7 +608,6 @@ def make_game_state(diff):
         "has_vine":False,"has_magma":False,"has_drop":False,"form":0,
         "thin_gap_vine":False,"r4_vine_open":False,
         "score":0,"sitting_since":None,
-        # FIX: enemies reset properly — use lambdas to avoid shared state
         "r3_enemies":[Enemy(500,250,"drop"),Enemy(450,380,"drop")],
         "r4_enemies":[Enemy(155,HEIGHT//2,"fire"),Enemy(338,HEIGHT//2,"vine"),Enemy(618,HEIGHT//2,"drop")],
         "r5_boss":Enemy(WIDTH//2,HEIGHT//2,"fire",boss=True),
@@ -585,7 +617,6 @@ def make_game_state(diff):
 
 # ── Room 4 contextual hint helper ─────────────────────────────────────────────
 def get_r4_hint(s):
-    """Returns the most relevant hint for the player's current R4 situation."""
     enemies = s["r4_enemies"]
     fire_alive = enemies[0].alive
     vine_alive = enemies[1].alive
@@ -649,12 +680,10 @@ while running:
             if keys[pygame.K_s]: s["player_y"]+=3;ndy+=1;moving=True
             if ndx or ndy: s["dx"],s["dy"]=ndx,ndy
 
-            # form keys
             for key,frm,need in[(pygame.K_1,1,"has_vine"),(pygame.K_2,2,"has_magma"),(pygame.K_3,3,"has_drop")]:
                 if keys[key] and s[need]: s["form"]=frm
             if keys[pygame.K_0]: s["form"]=0
 
-            # Q cycle
             q_now=keys[pygame.K_q]
             if q_now and not s["q_was"]:
                 avail=[0]+[f for f,k in[(1,"has_vine"),(2,"has_magma"),(3,"has_drop")] if s[k]]
@@ -663,26 +692,27 @@ while running:
                     s["form"]=avail[(idx+1)%len(avail)]
             s["q_was"]=q_now
 
-            # E interact
             e_now=keys[pygame.K_e]
             if e_now and not s["e_was"]:
                 pcr=pygame.Rect(s["player_x"]-RADIUS,s["player_y"]-RADIUS,RADIUS*2,RADIUS*2)
                 rm2=s["room"]
-                if rm2==1 and not s["has_vine"]  and pcr.colliderect(VINE_RECT.inflate(20,20)):  s["has_vine"]=True
-                if rm2==2 and not s["has_magma"] and pcr.colliderect(MAGMA_RECT.inflate(20,20)): s["has_magma"]=True
+                if rm2==1 and not s["has_vine"]  and pcr.colliderect(VINE_RECT.inflate(20,20)):
+                    s["has_vine"]=True;  play_sfx(sfx_slash)
+                if rm2==2 and not s["has_magma"] and pcr.colliderect(MAGMA_RECT.inflate(20,20)):
+                    s["has_magma"]=True; play_sfx(sfx_slash)
                 if rm2==2 and s["form"]==1 and not s["thin_gap_vine"] and pcr.colliderect(r2_wgap.inflate(30,30)):
                     s["thin_gap_vine"]=True
-                if rm2==3 and not s["has_drop"]  and pcr.colliderect(DROP_RECT.inflate(20,20)):  s["has_drop"]=True
-                # FIX: Room 4 vine wall — E in Vine form opens the vine wall gap
+                if rm2==3 and not s["has_drop"]  and pcr.colliderect(DROP_RECT.inflate(20,20)):
+                    s["has_drop"]=True;  play_sfx(sfx_slash)
                 if rm2==4 and s["form"]==1 and not s["r4_vine_open"] and pcr.colliderect(r4_vgap.inflate(30,30)):
                     s["r4_vine_open"]=True
             s["e_was"]=e_now
 
-            # F attack — with cooldown
             atk_ready = (t - s["atk_last"]) >= ATK_CD_MAX
             f_now=keys[pygame.K_f]
             if f_now and not s["f_was"] and atk_ready:
                 s["atk_last"]=t
+                play_sfx(sfx_slash)   # ← slash sound on every attack
                 s["slashes"].append(Slash(s["player_x"],s["player_y"],math.atan2(s["dy"],s["dx"]),SLASH_C[s["form"]]))
                 aen=(s["r3_enemies"] if s["room"]==3 else
                      s["r4_enemies"] if s["room"]==4 else
@@ -692,15 +722,14 @@ while running:
                     if math.hypot(en.x-s["player_x"],en.y-s["player_y"])<RADIUS+en.r+44:
                         if en.can_hit(s["form"]):
                             en.hp-=1; en.hit_flash=8
+                            play_sfx(sfx_hit)  # ← hit sound when a blow lands
                             if en.hp<=0: s["score"]+=20
             s["f_was"]=f_now
 
-            # clamp
             wt=R5_WALL_H if s["room"]==5 else WALL_H
             s["player_x"]=max(RADIUS,min(WIDTH-RADIUS,s["player_x"]))
             s["player_y"]=max(wt+RADIUS,min(HEIGHT-wt-RADIUS,s["player_y"]))
 
-            # wall collision
             rm=s["room"]; px,py=s["player_x"],s["player_y"]; frm=s["form"]
             if rm==1:
                 for w in room1_walls: px,py=resolve_wall(px,py,RADIUS,w)
@@ -721,7 +750,6 @@ while running:
             s["player_x"],s["player_y"]=px,py
             pcircle=pygame.Rect(px-RADIUS,py-RADIUS,RADIUS*2,RADIUS*2)
 
-            # enemies AI + attack cooldown + player damage
             if s["player_iframe"]>0: s["player_iframe"]-=1
             aen=(s["r3_enemies"] if rm==3 else
                  s["r4_enemies"] if rm==4 else
@@ -734,8 +762,8 @@ while running:
                         s["score"]=max(0,s["score"]-hit_pts)
                         s["player_iframe"]=50
                         en.atk_cd=55
+                        play_sfx(sfx_hit)  # ← hit sound when player takes damage
 
-            # throne win
             if rm==5:
                 boss=s["r5_boss"]
                 if not boss.alive and pcircle.colliderect(throne_rect):
@@ -750,13 +778,11 @@ while running:
             if pcircle.colliderect(BACK_RECT) and rm>1:
                 s["room"]-=1; s["player_x"],s["player_y"]=WIDTH-80,300
 
-            # ── FIX: portal transition — Room 4→5 requires all enemies dead ──
             if pcircle.colliderect(PORTAL_RECT):
                 if rm==1: s["room"]=2;s["player_x"],s["player_y"]=60,300
                 elif rm==2: s["room"]=3;s["player_x"],s["player_y"]=60,300
                 elif rm==3: s["room"]=4;s["player_x"],s["player_y"]=60,300
                 elif rm==4:
-                    # Require all R4 enemies dead AND vine wall opened (player must engage both sides)
                     r4_all_dead = all(not e.alive for e in s["r4_enemies"])
                     if r4_all_dead:
                         s["room"]=5;s["player_x"],s["player_y"]=60,300
@@ -826,7 +852,6 @@ while running:
             draw_back(screen)
             for sl in s["slashes"]: sl.draw(screen)
             draw_slime(screen,P_col,px,py,RADIUS,s["dx"],s["dy"],frm,s["player_iframe"])
-            # FIX: always show contextual Room 4 hint
             draw_hint(screen, get_r4_hint(s))
 
         elif rm==5:
@@ -843,14 +868,12 @@ while running:
             for sl in s["slashes"]: sl.draw(screen)
             draw_slime(screen,P_col,px,py,RADIUS,s["dx"],s["dy"],frm,s["player_iframe"])
             if boss.alive:
-                # FIX: boss hint — tell player the boss cycles forms and which form to use
                 kind_label = {"fire":"[2] Fire","vine":"[1] Vine","drop":"[3] Drop"}
                 draw_hint(screen, f"Boss changes form! Use {kind_label[boss.kind]} form now  |  [F] attack")
             else:
                 lb=font_med.render("Sit on the throne!",True,GOLD_C)
                 screen.blit(lb,(WIDTH//2-lb.get_width()//2,HEIGHT//2-80))
 
-        # ── Shared HUD ────────────────────────────────────────────────────────
         draw_hud_slots(screen,has_v,has_m,has_d,frm)
         draw_hint_btn(screen,hint_visible)
         draw_hp(screen,int(s["player_hp"]),s["player_hp_max"])
@@ -865,7 +888,9 @@ while running:
                 if res_btn.collidepoint(mx,my): paused=False
                 for i in range(1,6):
                     br=pygame.Rect(pr.x+28+(i-1)*54,pr.y+100,46,28)
-                    if br.collidepoint(mx,my): audio_volume=i
+                    if br.collidepoint(mx,my):
+                        audio_volume=i
+                        _apply_volume(audio_volume)  # ← actually wire up the volume change
 
         pygame.display.update(); continue
 
